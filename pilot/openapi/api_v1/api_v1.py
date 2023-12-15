@@ -21,8 +21,10 @@ from fastapi.responses import StreamingResponse
 from fastapi.exceptions import RequestValidationError
 from typing import List
 import tempfile
+from concurrent.futures import Executor
 
 from pilot.component import ComponentType
+from pilot.memory import ChatHistoryDao, ChatHistoryEntity
 from pilot.openapi.api_view_model import (
     Result,
     ConversationVo,
@@ -52,12 +54,15 @@ from pilot.memory.chat_history.chat_hisotry_factory import ChatHistory
 from pilot.model.cluster import BaseModelController, WorkerManager, WorkerManagerFactory
 from pilot.model.base import FlatSupportedModel
 from pilot.user import UserDao, UserRequest, get_user_from_headers
+from pilot.utils.tracer import root_tracer, SpanType
+from pilot.utils.executor_utils import ExecutorFactory, blocking_func_to_async
 
 router = APIRouter()
 CFG = Config()
 CHAT_FACTORY = ChatFactory()
 logger = logging.getLogger(__name__)
 knowledge_service = KnowledgeService()
+chat_history_dao = ChatHistoryDao()
 
 model_semaphore = None
 global_counter = 0
@@ -81,10 +86,13 @@ def __new_conversation(chat_mode, user_id) -> ConversationVo:
 
 def get_db_list(user_id: str = None):
     dbs = CFG.LOCAL_DB_MANAGE.get_db_list(user_id=user_id)
-    params: dict = {}
+    db_params = []
     for item in dbs:
-        params.update({item["db_name"]: item["db_name"]})
-    return params
+        params: dict = {}
+        params.update({"param": item["db_name"]})
+        params.update({"type": item["db_type"]})
+        db_params.append(params)
+    return db_params
 
 
 def plugins_select_info():
@@ -114,14 +122,17 @@ def knowledge_list_info():
     return params
 
 
-def knowledge_list():
+def knowledge_list(user_id: str = None):
     """return knowledge space list"""
-    params: dict = {}
-    request = KnowledgeSpaceRequest()
+    request = KnowledgeSpaceRequest(user_id=user_id)
     spaces = knowledge_service.get_knowledge_space(request)
+    space_list = []
     for space in spaces:
-        params.update({space.name: space.name})
-    return params
+        params: dict = {}
+        params.update({"param": space.name})
+        params.update({"type": "space"})
+        space_list.append(params)
+    return space_list
 
 
 def get_model_controller() -> BaseModelController:
@@ -136,6 +147,13 @@ def get_worker_manager() -> WorkerManager:
         ComponentType.WORKER_MANAGER_FACTORY, WorkerManagerFactory
     ).create()
     return worker_manager
+
+
+def get_executor() -> Executor:
+    """Get the global default executor"""
+    return CFG.SYSTEM_APP.get_component(
+        ComponentType.EXECUTOR_DEFAULT, ExecutorFactory
+    ).create()
 
 
 @router.get("/v1/chat/db/list", response_model=Result[DBConfig])
@@ -170,14 +188,16 @@ async def async_db_summary_embedding(db_name, db_type):
 @router.post("/v1/chat/db/test/connect", response_model=Result[bool])
 async def test_connect(db_config: DBConfig = Body()):
     try:
+        # TODO Change the synchronous call to the asynchronous call
         CFG.LOCAL_DB_MANAGE.test_connect(db_config)
         return Result.succ(True)
     except Exception as e:
-        return Result.faild(code="E1001", msg=str(e))
+        return Result.failed(code="E1001", msg=str(e))
 
 
 @router.post("/v1/chat/db/summary", response_model=Result[bool])
 async def db_summary(db_name: str, db_type: str):
+    # TODO Change the synchronous call to the asynchronous call
     async_db_summary_embedding(db_name, db_type)
     return Result.succ(True)
 
@@ -227,8 +247,8 @@ async def dialogue_scenes():
     scene_vos: List[ChatSceneVo] = []
     new_modes: List[ChatScene] = [
         ChatScene.ChatWithDbExecute,
-        ChatScene.ChatExcel,
         ChatScene.ChatWithDbQA,
+        ChatScene.ChatExcel,
         ChatScene.ChatKnowledge,
         ChatScene.ChatDashboard,
         ChatScene.ChatAgent,
@@ -259,18 +279,21 @@ async def params_list(chat_mode: str = ChatScene.ChatNormal.value(), user_token:
     result = None
     if ChatScene.ChatWithDbQA.value() == chat_mode:
         result = get_db_list(user_id=user_token.user_id)
+        result = [d for d in result if d['param'] not in ['auth', 'dbgpt']]
     elif ChatScene.ChatWithDbExecute.value() == chat_mode:
         result = get_db_list(user_id=user_token.user_id)
+        result = [d for d in result if d['param'] not in ['auth', 'dbgpt']]
     elif ChatScene.ChatDashboard.value() == chat_mode:
         result = get_db_list(user_id=user_token.user_id)
+        result = [d for d in result if d['param'] not in ['auth', 'dbgpt']]
     elif ChatScene.ChatExecution.value() == chat_mode:
         result = plugins_select_info()
     elif ChatScene.ChatKnowledge.value() == chat_mode:
-        result = knowledge_list()
-    if result and result.get("dbgpt"):
-        del result["dbgpt"]
-    if result and result.get("auth"):
-        del result["auth"]
+        result = knowledge_list(user_id=user_token.user_id)
+    elif ChatScene.ChatKnowledge.ExtractRefineSummary.value() == chat_mode:
+        result = knowledge_list(user_id=user_token.user_id)
+    else:
+        return Result.succ(None)
     return Result.succ(result)
 
 
@@ -302,14 +325,14 @@ async def params_load(
                 select_param=doc_file.filename,
                 model_name=model_name,
             )
-            chat: BaseChat = get_chat_instance(dialogue, user_token.user_id)
+            chat: BaseChat = await get_chat_instance(dialogue, user_token.user_id)
             resp = await chat.prepare()
 
         ### refresh messages
         return Result.succ(get_hist_messages(conv_uid))
     except Exception as e:
         logger.error("excel load error!", e)
-        return Result.faild(code="E000X", msg=f"File Load Error {e}")
+        return Result.failed(code="E000X", msg=f"File Load Error {e}")
 
 
 @router.post("/v1/user/add")
@@ -330,6 +353,7 @@ async def add_user(user_req: UserRequest):
 async def dialogue_delete(con_uid: str):
     history_fac = ChatHistory()
     history_mem = history_fac.get_store_instance(con_uid)
+    # TODO Change the synchronous call to the asynchronous call
     history_mem.delete()
     return Result.succ(None)
 
@@ -342,7 +366,6 @@ def get_hist_messages(conv_uid: str):
     history_messages: List[OnceConversation] = history_mem.get_messages()
     if history_messages:
         for once in history_messages:
-            print(f"once:{once}")
             model_name = once.get("model_name", CFG.LLM_MODEL)
             once_message_vos = [
                 message2Vo(element, once["chat_order"], model_name)
@@ -352,13 +375,33 @@ def get_hist_messages(conv_uid: str):
     return message_vos
 
 
+@router.get("/v1/chat/dialogue/share_id")
+async def share_dialogue(conv_uid: str):
+    try:
+        ch: ChatHistoryEntity = chat_history_dao.get_by_uid(conv_uid)
+        if ch:
+            if ch.share_id is not None:
+                return Result.succ({"share_id": ch.share_id})
+            ch.share_id = uuid.uuid4().hex
+            if chat_history_dao.update_chat_history(ch) is not None:
+                return Result.succ({"share_id": ch.share_id})
+        return Result.failed(code="E000X", msg=f"dialogue {conv_uid} is not exist!")
+    except Exception as ex:
+        return Result.failed(code="E000X", msg=f"Share dialogue exception: {str(ex)}")
+
+
 @router.get("/v1/chat/dialogue/messages/history", response_model=Result[MessageVo])
-async def dialogue_history_messages(con_uid: str):
+async def dialogue_history_messages(con_uid: str, share_id: str = None, user_token: UserRequest = Depends(get_user_from_headers)):
+    chat_history: ChatHistoryEntity = chat_history_dao.get_by_uid_and_user(conv_uid=con_uid, user_name=user_token.user_id, share_id=share_id)
+    if chat_history is None:
+        return Result.failed(code="E000X", msg=f"You don't have permission of current dialogue.")
     print(f"dialogue_history_messages:{con_uid}")
+    # TODO Change the synchronous call to the asynchronous call
     return Result.succ(get_hist_messages(con_uid))
 
 
-def get_chat_instance(dialogue: ConversationVo = Body(), user_id: str = None) -> BaseChat:
+# def get_chat_instance(dialogue: ConversationVo = Body(), user_id: str = None) -> BaseChat:
+async def get_chat_instance(dialogue: ConversationVo = Body(), user_id: str = None) -> BaseChat:
     logger.info(f"get_chat_instance:{dialogue}")
     if not dialogue.chat_mode:
         dialogue.chat_mode = ChatScene.ChatNormal.value()
@@ -368,7 +411,7 @@ def get_chat_instance(dialogue: ConversationVo = Body(), user_id: str = None) ->
 
     if not ChatScene.is_valid_mode(dialogue.chat_mode):
         raise StopAsyncIteration(
-            Result.faild("Unsupported Chat Mode," + dialogue.chat_mode + "!")
+            Result.failed("Unsupported Chat Mode," + dialogue.chat_mode + "!")
         )
 
     chat_param = {
@@ -378,8 +421,14 @@ def get_chat_instance(dialogue: ConversationVo = Body(), user_id: str = None) ->
         "model_name": dialogue.model_name,
         "user_id": user_id,
     }
-    chat: BaseChat = CHAT_FACTORY.get_implementation(
-        dialogue.chat_mode, **{"chat_param": chat_param}
+    # chat: BaseChat = CHAT_FACTORY.get_implementation(
+    #     dialogue.chat_mode, **{"chat_param": chat_param}
+    # )
+    chat: BaseChat = await blocking_func_to_async(
+        get_executor(),
+        CHAT_FACTORY.get_implementation,
+        dialogue.chat_mode,
+        **{"chat_param": chat_param},
     )
     return chat
 
@@ -389,7 +438,7 @@ async def chat_prepare(dialogue: ConversationVo = Body(), user_token: UserReques
     # dialogue.model_name = CFG.LLM_MODEL
     logger.info(f"chat_prepare:{dialogue}")
     ## check conv_uid
-    chat: BaseChat = get_chat_instance(dialogue, user_token.user_id)
+    chat: BaseChat = await get_chat_instance(dialogue, user_token.user_id)
     if len(chat.history_message) > 0:
         return Result.succ(None)
     resp = await chat.prepare()
@@ -402,6 +451,15 @@ async def stream_error(msg):
 
 @router.post("/v1/chat/completions")
 async def chat_completions(dialogue: ConversationVo = Body(), user_token: UserRequest = Depends(get_user_from_headers)):
+    print(
+        f"chat_completions:{dialogue.chat_mode},{dialogue.select_param},{dialogue.model_name}"
+    )
+    with root_tracer.start_span(
+        "get_chat_instance", span_type=SpanType.CHAT, metadata=dialogue.dict()
+    ):
+        chat: BaseChat = await get_chat_instance(dialogue, user_token.user_id)
+    # background_tasks = BackgroundTasks()
+    # background_tasks.add_task(release_model_semaphore)
     headers = {
         "Content-Type": "text/event-stream",
         "Cache-Control": "no-cache",
@@ -423,7 +481,6 @@ async def chat_completions(dialogue: ConversationVo = Body(), user_token: UserRe
     print(
         f"chat_completions:{dialogue.chat_mode},{dialogue.select_param},{dialogue.model_name}"
     )
-    chat: BaseChat = get_chat_instance(dialogue, user_token.user_id)
     # background_tasks = BackgroundTasks()
     # background_tasks.add_task(release_model_semaphore)
 
@@ -454,7 +511,7 @@ async def model_types(controller: BaseModelController = Depends(get_model_contro
         return Result.succ(list(types))
 
     except Exception as e:
-        return Result.faild(code="E000X", msg=f"controller model types error {e}")
+        return Result.failed(code="E000X", msg=f"controller model types error {e}")
 
 
 @router.get("/v1/model/supports")
@@ -464,7 +521,7 @@ async def model_supports(worker_manager: WorkerManager = Depends(get_worker_mana
         models = await worker_manager.supported_models()
         return Result.succ(FlatSupportedModel.from_supports(models))
     except Exception as e:
-        return Result.faild(code="E000X", msg=f"Fetch supportd models error {e}")
+        return Result.failed(code="E000X", msg=f"Fetch supportd models error {e}")
 
 
 @router.get("/v1/github/callback")
@@ -498,8 +555,9 @@ async def github_access_token(code: str = None):
 
 
 async def no_stream_generator(chat):
-    msg = await chat.nostream_call()
-    yield f"data: {msg}\n\n"
+    with root_tracer.start_span("no_stream_generator"):
+        msg = await chat.nostream_call()
+        yield f"data: {msg}\n\n"
 
 
 async def stream_generator(chat, incremental: bool, model_name: str):
@@ -516,6 +574,7 @@ async def stream_generator(chat, incremental: bool, model_name: str):
     Yields:
         _type_: streaming responses
     """
+    span = root_tracer.start_span("stream_generator")
     msg = "[LLM_ERROR]: llm server has no output, maybe your prompt template is wrong."
 
     stream_id = f"chatcmpl-{str(uuid.uuid1())}"
@@ -541,6 +600,7 @@ async def stream_generator(chat, incremental: bool, model_name: str):
             await asyncio.sleep(0.02)
     if incremental:
         yield "data: [DONE]\n\n"
+    span.end()
 
 
 def message2Vo(message: dict, order, model_name) -> MessageVo:
