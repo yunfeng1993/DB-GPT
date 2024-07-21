@@ -1,6 +1,6 @@
 import { addSpace, apiInterceptors } from '@/client/api';
-import { StepChangeParams } from '@/types/knowledge';
-import { Button, Form, Input, Spin,Select } from 'antd';
+import { SpaceConfig, StepChangeParams } from '@/types/knowledge';
+import { Button, Form, Input, Spin, Select } from 'antd';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -8,22 +8,23 @@ type FieldType = {
   spaceName: string;
   owner: string;
   description: string;
-  storage:string;
+  storage: string;
 };
 
 type IProps = {
   handleStepChange: (params: StepChangeParams) => void;
+  spaceConfig?: SpaceConfig | null;
 };
 
 export default function SpaceForm(props: IProps) {
   const { t } = useTranslation();
-  const { handleStepChange } = props;
+  const { handleStepChange, spaceConfig } = props;
   const [spinning, setSpinning] = useState<boolean>(false);
 
   const handleFinish = async (fieldsValue: FieldType) => {
-    const { spaceName, owner, description,storage } = fieldsValue;
+    const { spaceName, owner, description, storage } = fieldsValue;
     setSpinning(true);
-    let vector_type = storage
+    let vector_type = storage;
     const [_, data, res] = await apiInterceptors(
       addSpace({
         name: spaceName,
@@ -68,9 +69,9 @@ export default function SpaceForm(props: IProps) {
         </Form.Item>
         <Form.Item<FieldType> label={t('Storage')} name="storage" rules={[{ required: true, message: t('Please_select_the_storage') }]}>
           <Select className="mb-5 h-12" placeholder={t('Please_select_the_storage')}>
-            <Select.Option value="VectorStore">Vector Store</Select.Option>
-            <Select.Option value="KnowledgeGraph">Knowledge Graph</Select.Option>
-            <Select.Option value="FullText">Full Text</Select.Option>
+            {spaceConfig?.data?.storage?.[0]?.domain_types?.map((item) => {
+              return <Select.Option value={item?.name}>{item?.name}</Select.Option>;
+            })}
           </Select>
         </Form.Item>
         <Form.Item<FieldType> label={t('Description')} name="description" rules={[{ required: true, message: t('Please_input_the_description') }]}>

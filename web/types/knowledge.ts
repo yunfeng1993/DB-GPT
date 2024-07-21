@@ -133,9 +133,9 @@ export type IChunkList = {
 };
 
 export type GraphVisResult = {
-  nodes:Array<any>,
-  edges:Array<any>
-}
+  nodes: Array<any>;
+  edges: Array<any>;
+};
 
 export type ArgumentsParams = {
   argument: string;
@@ -158,4 +158,14 @@ export type SummaryParams = {
   doc_id: number;
   model_name: string;
   conv_uid: string;
+};
+
+export type SpaceConfig = {
+  data: { 
+    storage: Array<{
+      name: string;
+      desc: string;
+      domain_types: Array<{ name: string; desc: string }>;
+    }>;
+  };
 };

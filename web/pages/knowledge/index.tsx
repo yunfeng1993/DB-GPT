@@ -2,14 +2,15 @@ import React, { useState, useEffect } from 'react';
 import { PlusOutlined } from '@ant-design/icons';
 import { Button, Modal, Steps } from 'antd';
 import SpaceCard from '@/components/knowledge/space-card';
-import { File, ISpace, StepChangeParams } from '@/types/knowledge';
-import { apiInterceptors, getSpaceList } from '@/client/api';
+import { File, ISpace, SpaceConfig, StepChangeParams } from '@/types/knowledge';
+import { apiInterceptors, getSpaceConfig, getSpaceList } from '@/client/api';
 import { useTranslation } from 'react-i18next';
 import DocUploadForm from '@/components/knowledge/doc-upload-form';
 import SpaceForm from '@/components/knowledge/space-form';
 import DocTypeForm from '@/components/knowledge/doc-type-form';
 import Segmentation from '@/components/knowledge/segmentation';
 import classNames from 'classnames';
+
 
 const Knowledge = () => {
   const [spaceList, setSpaceList] = useState<Array<ISpace> | null>([]);
@@ -18,6 +19,7 @@ const Knowledge = () => {
   const [spaceName, setSpaceName] = useState<string>('');
   const [files, setFiles] = useState<Array<File>>([]);
   const [docType, setDocType] = useState<string>('');
+  const [spaceConfig, setSpaceConfig] = useState<SpaceConfig | null>(null);
   const { t } = useTranslation();
   const addKnowledgeSteps = [
     { title: t('Knowledge_Space_Config') },
@@ -26,12 +28,18 @@ const Knowledge = () => {
     { title: t('Segmentation') },
   ];
 
+  async function getSpaceConfigs() {
+    const [_, data] = await apiInterceptors(getSpaceConfig());
+    setSpaceConfig(data);
+  }
+
   async function getSpaces() {
     const [_, data] = await apiInterceptors(getSpaceList());
     setSpaceList(data);
   }
   useEffect(() => {
     getSpaces();
+    getSpaceConfigs();
   }, []);
 
   const handleStepChange = ({ label, spaceName, docType, files }: StepChangeParams) => {
@@ -93,7 +101,7 @@ const Knowledge = () => {
         footer={null}
       >
         <Steps current={activeStep} items={addKnowledgeSteps} />
-        {activeStep === 0 && <SpaceForm handleStepChange={handleStepChange} />}
+        {activeStep === 0 && <SpaceForm spaceConfig={spaceConfig} handleStepChange={handleStepChange} />}
         {activeStep === 1 && <DocTypeForm handleStepChange={handleStepChange} />}
         <DocUploadForm
           className={classNames({ hidden: activeStep !== 2 })}
