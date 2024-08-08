@@ -4,8 +4,8 @@ import React from 'react';
 import RequiredIcon from './required-icon';
 import NodeHandler from './node-handler';
 import { InfoCircleOutlined } from '@ant-design/icons';
-import { RenderSelect, RenderCascader } from './node-renderer';
-
+import { RenderSelect, RenderTextArea,RenderCascader } from './node-renderer';
+import { uiAtrrtUnderlineToHump } from '@/utils/flow'
 interface NodeParamHandlerProps {
   node: IFlowNode;
   data: IFlowNodeParameter;
@@ -102,11 +102,18 @@ const NodeParamHandler: React.FC<NodeParamHandlerProps> = ({ node, data, label, 
   // render node parameters based on AWEL2.0
   function renderNodeWithUiParam(data: IFlowNodeParameter) {
     let defaultValue = data.value !== null && data.value !== undefined ? data.value : data.default;
-
+    if (data?.ui?.attr) {
+      uiAtrrtUnderlineToHump(data.ui.attr)
+    }
+    console.log(data);
     // TODO: 根据ui_type渲染不同的组件
     switch (data?.ui?.ui_type) {
       case 'select':
         return <RenderSelect  data={data} defaultValue={defaultValue} onChange={onChange} />;
+        break
+      case 'text_area':
+        return <RenderTextArea  data={data}  />;
+        break
     }
   }
 
