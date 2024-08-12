@@ -6,15 +6,17 @@ const { TextArea } = Input;
 
 type TextAreaProps = {
   data: IFlowNodeParameter;
+  defaultValue: any;
+  onChange: (value: any) => void;
 }
 
+
 export const RenderTextArea = (params: TextAreaProps) => {
-  const { data } = params;
+  const { data, defaultValue, onChange } = params;
   if(data?.ui?.autosize){
     uiAtrrtUnderlineToHump(data.ui.autosize)
   }
-
   return (
-    <TextArea {...data.ui.attr}  {...data.ui.autosize}  rows={4} />
+    <TextArea {...data.ui.attr} defaultValue={defaultValue} onChange={(e) => onChange(e.target.value)}   {...data.ui.autosize}  rows={4} />
   ) 
 }

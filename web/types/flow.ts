@@ -64,6 +64,7 @@ export type IFlowNodeParameterUI = {
     min_rows: number;
     max_rows: number;
   };
+  show_input: boolean;
 };
 
 export type IFlowNodeInput = {

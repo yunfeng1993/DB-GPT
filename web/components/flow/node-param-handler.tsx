@@ -4,7 +4,7 @@ import React from 'react';
 import RequiredIcon from './required-icon';
 import NodeHandler from './node-handler';
 import { InfoCircleOutlined } from '@ant-design/icons';
-import { RenderSelect, RenderTextArea,RenderCascader } from './node-renderer';
+import { RenderSelect,RenderSlider,RenderTreeSelect, RenderTimePicker,RenderTextArea,RenderCascader } from './node-renderer';
 import { uiAtrrtUnderlineToHump } from '@/utils/flow'
 interface NodeParamHandlerProps {
   node: IFlowNode;
@@ -16,6 +16,8 @@ interface NodeParamHandlerProps {
 // render node parameters item
 const NodeParamHandler: React.FC<NodeParamHandlerProps> = ({ node, data, label, index }) => {
   function onChange(value: any) {
+    console.log(value);
+    
     data.value = value;
   }
 
@@ -105,14 +107,22 @@ const NodeParamHandler: React.FC<NodeParamHandlerProps> = ({ node, data, label, 
     if (data?.ui?.attr) {
       uiAtrrtUnderlineToHump(data.ui.attr)
     }
-    console.log(data);
     // TODO: 根据ui_type渲染不同的组件
     switch (data?.ui?.ui_type) {
       case 'select':
         return <RenderSelect  data={data} defaultValue={defaultValue} onChange={onChange} />;
         break
       case 'text_area':
-        return <RenderTextArea  data={data}  />;
+        return <RenderTextArea  data={data} defaultValue={defaultValue} onChange={onChange} />;
+        break  
+      case 'slider':
+        return <RenderSlider  data={data} defaultValue={defaultValue} onChange={onChange} />;
+        break 
+      case 'time_picker':
+        return <RenderTimePicker  data={data} defaultValue={defaultValue} onChange={onChange} />;
+        break
+        case 'tree_select':
+        return <RenderTreeSelect  data={data} defaultValue={defaultValue} onChange={onChange} />;
         break
     }
   }
